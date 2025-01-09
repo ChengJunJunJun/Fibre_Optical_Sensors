@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, mean_squared_error, mean_absolute_error
-
+from tqdm import tqdm
 def test_one_epoch(model, dataloader, criterion_position, criterion_force, device):
     model.eval()  # 设置模型为评估模式
     running_loss = 0.0
@@ -23,7 +23,7 @@ def test_one_epoch(model, dataloader, criterion_position, criterion_force, devic
             loss_direction = criterion_position(outputs_direction, labels_direction)
             loss_position = criterion_position(outputs_position, labels_position)
             loss_force = criterion_force(outputs_force.squeeze(), labels_force)
-            loss = 1.0 * loss_direction + 1.0 * loss_position + 1.0 * loss_force
+            loss = 1.0 * loss_direction + 1.0 * loss_position + 2.0 * loss_force
 
             # 累计损失
             running_loss += loss.item()
@@ -51,5 +51,5 @@ def test_one_epoch(model, dataloader, criterion_position, criterion_force, devic
     epoch_accuracy_position = running_accuracy_position / total_batches
     epoch_mse_force = running_mse_force / total_batches
     epoch_mae_force = running_mae_force / total_batches
-    print(f'Test Epoch Loss: {epoch_loss:.10f}, Accuracy Direction: {epoch_accuracy_direction:.4f}, Accuracy Position: {epoch_accuracy_position:.4f}, MSE Force: {epoch_mse_force:.4f}, MAE Force: {epoch_mae_force:.4f}')
+    tqdm.write(f'Test Epoch Loss: {epoch_loss:.10f}, Accuracy Direction: {epoch_accuracy_direction:.4f}, Accuracy Position: {epoch_accuracy_position:.4f}, MSE Force: {epoch_mse_force:.4f}, MAE Force: {epoch_mae_force:.4f}')
     return epoch_loss, epoch_accuracy_direction, epoch_accuracy_position, epoch_mse_force, epoch_mae_force

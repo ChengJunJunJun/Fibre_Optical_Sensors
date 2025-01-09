@@ -1,12 +1,9 @@
-from tqdm import tqdm
-import time
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 import torch.nn as nn
-import torch.nn.functional as F
-from utils import time_calc
 from sklearn.metrics import accuracy_score, mean_squared_error, mean_absolute_error
+from tqdm import tqdm
 
 
 def train_one_epoch(model, dataloader, criterion_position, criterion_force, optimizer, device):
@@ -30,7 +27,7 @@ def train_one_epoch(model, dataloader, criterion_position, criterion_force, opti
         loss_direction = criterion_position(outputs_direction, labels_direction)
         loss_position = criterion_position(outputs_position, labels_position)
         loss_force = criterion_force(outputs_force.squeeze(), labels_force)
-        loss = 1.0 * loss_direction + 1.0 * loss_position + 1.0 * loss_force
+        loss = 1.0 * loss_direction + 1.0 * loss_position + 2.0 * loss_force
         # 反向传播和优化
         loss.backward()
         optimizer.step()
@@ -62,12 +59,3 @@ def train_one_epoch(model, dataloader, criterion_position, criterion_force, opti
     epoch_mae_force = running_mae_force / total_batches
     tqdm.write(f'Epoch Loss: {epoch_loss:.10f}, Accuracy Direction: {epoch_accuracy_direction:.4f}, Accuracy Position: {epoch_accuracy_position:.4f}, MSE Force: {epoch_mse_force:.4f}, MAE Force: {epoch_mae_force:.4f}')
     return epoch_loss, epoch_accuracy_direction, epoch_accuracy_position, epoch_mse_force, epoch_mae_force
-
-@time_calc
-def train(model, dataloader, num_epochs, criterion_position, criterion_force, optimizer, device):
-    for epoch in range(num_epochs):
-        # 调用 train_one_epoch 进行训练
-        epoch_loss, epoch_accuracy_direction, epoch_accuracy_position, epoch_mse_force, epoch_mae_force = train_one_epoch(model, dataloader, criterion_position, criterion_force, optimizer, device)
-        tqdm.write(f'Epoch {epoch + 1} finished with loss: {epoch_loss:.3f}, Accuracy Direction: {epoch_accuracy_direction:.4f}, Accuracy Position: {epoch_accuracy_position:.4f}, MSE Force: {epoch_mse_force:.4f}, MAE Force: {epoch_mae_force:.4f}')
-
-    print('Finished Training')

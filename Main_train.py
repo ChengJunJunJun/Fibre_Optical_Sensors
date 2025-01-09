@@ -1,135 +1,125 @@
 import os
-import argparse # 用于解析命令行参数
 import pandas as pd
 import numpy as np
 import wandb
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
-from sklearn.model_selection import train_test_split
-from matplotlib import pyplot as plt
-
-from datas import FBGDataset, z_score_normalize_samplewise, min_max_normalize
 from models import FBGNet , MultiTaskTransformer, ResNet1D, PatchTST, CONFIGS
 from config import MODEL_SAVE_DIR, NUM_EPOCHS
 from train import train_one_epoch
 from test import test_one_epoch
-from utils import test_model
-
-# os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
-# start a new wandb run to track this script
-wandb.init(
-    project="Fibre_Optical_sensors",
-    entity="chengjun_team",
-    notes="train-test-split-augmentation",
-    config={
-        "num_epochs": NUM_EPOCHS,
-        "checkpoint_path": MODEL_SAVE_DIR,
-        "learning_rate": 0.001,
-        "architecture": "分类＋回归",
-        "dataset": "output_noise_new.xlsx"
-    }
-)
-
-def config_params():
-    # 定义一个解析器
-    parser = argparse.ArgumentParser(description="Training script to set model save path.")
-    # checkpoint路径
-    parser.add_argument('--checkpoint_path', type=str, default=MODEL_SAVE_DIR,
-                        help="The path to the checkpoint file.")
-    # 添加一个参数用于接收模型路径
-    parser.add_argument('--model_save_path', type=str, default="model_both_normalize_600.pth",
-                        help="The path to save the model file.")
-    parser.add_argument('--num_epochs', type=int, default=NUM_EPOCHS,
-                        help="The path to save the model file.")
-
-    args = parser.parse_args()
-    return args
+from datas.data_preprocess import get_dataloaders
+from datas.valid_true_preprocess import get_valid_dataloaders
+from utils.graph_test_model import valid_true_evaluate
 
 
+def init_wandb():
+    wandb.init(
+        project="Fibre_Optical",
+        entity="chengjun_team",
+        config={
+            "num_epochs": NUM_EPOCHS,
+            "checkpoint_path": MODEL_SAVE_DIR,
+            "learning_rate": 0.001,
+            "architecture": "分类＋回归",
+            "dataset": "data.txt"
+        }
+    )
 
-x_data = np.loadtxt('Data_sets/data.txt', delimiter=',')  # (19968, 2000)
-# 步骤1：重塑数组
-x_data = x_data.reshape(9984, 2, 2000)
-# 步骤2：调整轴的顺序
-normalized_data_x = np.transpose(x_data, (0, 2, 1))
-normalized_data_x = z_score_normalize_samplewise(normalized_data_x)
-# normalized_data_x = np.transpose(normalized_data_x, (0, 2, 1))  # use this for resnet1d
 
-y = np.loadtxt('Data_sets/label.txt', delimiter=',')  # (9984, 3)
-
-# 假设 x 和 y 是 numpy 数组，需要转换为 PyTorch 的张量
-x_tensor = torch.from_numpy(normalized_data_x).float()  # 输入数据
-y_direction_tensor = torch.from_numpy(y[:, 0]).long()
-y_position_tensor = torch.from_numpy(y[:, 1]).long()
-y_force_tensor = torch.from_numpy(y[:,2]).float()
-# train test split
-x_train, x_test, y_direction_train, y_direction_test, y_position_train, y_position_test, y_force_train, y_force_test = train_test_split(
-    x_tensor, y_direction_tensor, y_position_tensor, y_force_tensor, test_size=0.2, random_state=42)
-
-def main():
-    arg = config_params()
+def train_model(use_wandb=False, num_epochs=200):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if use_wandb:
+        init_wandb()
+    
     # 创建数据集实例
-    fbg_train_dataset = FBGDataset(x_train, y_direction_train, y_position_train, y_force_train, train=True)
-    fbg_test_dataset = FBGDataset(x_test, y_direction_test, y_position_test, y_force_test, train=False)
-    # 使用 DataLoader 创建数据加载器
-    train_dataloader = DataLoader(fbg_train_dataset, batch_size=196, shuffle=True)
-    test_dataloader = DataLoader(fbg_test_dataset, batch_size=196, shuffle=False)
-    # 实例化模型
-    # model = MultiTaskTransformer(input_dim = 2)
-    # model = ResNet1D(in_channels=2, base_filters=64, kernel_size=7, stride=3, groups=1, n_block=8, n_classes_1=25, n_classes_2=24)
+    train_dataloader, test_dataloader = get_dataloaders(batch_size=196)
+
+    # valid_dataloader = get_valid_dataloaders(batch_size=60)
+    # model = PatchTST(num_classes_1=25, num_classes_2=24, configs=CONFIGS)
+    
     model = PatchTST(num_classes_1=25, num_classes_2=24, configs=CONFIGS)
     model.to(device)
     torch.compile(model)
+
     # 损失函数和优化器
-    criterion_position = nn.CrossEntropyLoss()  # 位置的分类损失
-    criterion_force = nn.SmoothL1Loss()  # 力的大小的回归损失
+    criterion_position = nn.CrossEntropyLoss()
+    criterion_force = nn.SmoothL1Loss()
     optimizer = optim.AdamW(model.parameters(), lr=0.001)
     decay_rate = 0.2
     decay_steps = [70, 140]
 
-    for epoch in range(arg.num_epochs):
+    best_mae = float('inf')  # Initialize best MAE as infinity
+    
+    for epoch in range(num_epochs):
         print(f"Epoch {epoch + 1}")
         # 学习率衰减
         if epoch in decay_steps:
             for param_group in optimizer.param_groups:
                 param_group['lr'] *= decay_rate
-        # 调用 train_one_epoch 进行训练
+
+        # 训练和测试
         train_results = train_one_epoch(model, train_dataloader, criterion_position, criterion_force, optimizer, device)
         train_loss, train_accuracy_direction, train_accuracy_position, train_mse_force, train_mae_force = train_results
-        # print(f'Epoch {epoch + 1} finished with loss: {train_results:.3f}')
+        
         test_results = test_one_epoch(model, test_dataloader, criterion_position, criterion_force, device)
         test_loss, test_accuracy_direction, test_accuracy_position, test_mse_force, test_mae_force = test_results
-        # print(f'Epoch {epoch + 1} finished with loss: {test_results:.3f}')
-        # log the results to wandb
-        wandb.log({
-            "train_loss": train_loss,
-            "test_loss": test_loss,
-            "train_accuracy_direction": train_accuracy_direction,
-            "train_accuracy_position": train_accuracy_position,
-            "train_mse_force": train_mse_force,
-            "train_mae_force": train_mae_force,
-            "test_accuracy_direction": test_accuracy_direction,
-            "test_accuracy_position": test_accuracy_position,
-            "test_mse_force": test_mse_force,
-            "test_mae_force": test_mae_force
-        })
 
-    # 保存模型
-    if not os.path.exists(arg.checkpoint_path):
-        os.makedirs(arg.checkpoint_path)
-    model_path = os.path.join(arg.checkpoint_path, arg.model_save_path)
-    print(f"Saving model to {model_path}")
-    torch.save(model.state_dict(), model_path)
-    print("Model saved to model.pth")
+        # Save model if we get better MAE
+        if test_mae_force < best_mae:
+            best_mae = test_mae_force
+            if not os.path.exists(MODEL_SAVE_DIR):
+                os.makedirs(MODEL_SAVE_DIR)
+            model_path = os.path.join(MODEL_SAVE_DIR, "full_data_best_model.pth")
+            print(f"New best MAE: {best_mae:.4f}, saving model to {model_path}")
+            torch.save(model.state_dict(), model_path)
+
+        # valid_results = valid_true_evaluate(model, valid_dataloader, device)
+        # direction_cm, position_cm = valid_results['direction_cm'], valid_results['position_cm']
+        # valid_accuracy_direction, valid_accuracy_position, valid_mse_force = valid_results['direction_accuracy'], valid_results['position_accuracy'], valid_results['force_mse']
+
+
+        if use_wandb:
+            wandb.log({
+                "train_loss": train_loss,
+                "test_loss": test_loss,
+                #########
+                "train_accuracy_direction": train_accuracy_direction,
+                "train_accuracy_position": train_accuracy_position,
+                "train_mse_force": train_mse_force,
+                "train_mae_force": train_mae_force,
+                ######
+                "test_accuracy_direction": test_accuracy_direction,
+                "test_accuracy_position": test_accuracy_position,
+                "test_mse_force": test_mse_force,
+                "test_mae_force": test_mae_force,
+                # #########
+                # "valid_accuracy_direction": valid_accuracy_direction,
+                # "valid_accuracy_position": valid_accuracy_position,
+                # "valid_mse_force": valid_mse_force,
+                # #########
+                # "direction_cm": wandb.Image(direction_cm),
+                # "position_cm": wandb.Image(position_cm)
+            })
+
+    # # 保存模型
+    # if not os.path.exists(MODEL_SAVE_DIR):
+    #     os.makedirs(MODEL_SAVE_DIR)
+    # model_path = os.path.join(MODEL_SAVE_DIR, "model.pth")
+    # print(f"Saving model to {model_path}")
+    # torch.save(model.state_dict(), model_path)
+    
     # # 测试模型
-    test_model(test_dataloader, model, model_path)
+    # test_model(test_dataloader, model, model_path)
 
-    wandb.finish()
+    if use_wandb:
+        wandb.finish()
+    
 
 
+def main():
+    train_model(use_wandb=True, num_epochs=200)
 
 if __name__ == "__main__":
     main()

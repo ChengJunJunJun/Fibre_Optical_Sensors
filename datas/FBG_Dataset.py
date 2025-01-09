@@ -44,26 +44,17 @@ class FBGDataset(Dataset):
 
     def __getitem__(self, idx):
         x = self.x_tensor[idx]
+        # 对每个样本进行z-score归一化
+        x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, keepdim=True) + 1e-7)
+        
         if self.train:
             x = ComposeTransform([Jitter(0.1), Scaling(0.01)])(x)
+            
         y_direction = self.y_direction_tensor[idx]
         y_position = self.y_position_tensor[idx]
         y_force = self.y_force_tensor[idx]
         return x, y_direction, y_position, y_force
     
-def z_score_normalize_samplewise(data):
-    means = np.mean(data, axis=1,keepdims = True)  # 每个样本的均值
-    # print(means.shape)
-    stds = np.std(data, axis=1,keepdims = True)    # 每个样本的标准差
-    # print(stds.shape)
-    return (data - means) / stds
-
-# Min-Max归一化函数
-def min_max_normalize(data, min_val, max_val):
-    return (data - min_val) / (max_val - min_val)
-
-def min_max_denormalize(norm_data, min_val, max_val):
-    return norm_data * (max_val - min_val) + min_val
 
 
 if __name__ == '__main__':
